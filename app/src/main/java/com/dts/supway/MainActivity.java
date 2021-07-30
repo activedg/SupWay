@@ -3,9 +3,11 @@ package com.dts.supway;
 import androidx.annotation.NonNull;
 import androidx.annotation.Nullable;
 import androidx.appcompat.app.ActionBar;
+import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
 
+import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
@@ -16,12 +18,14 @@ import android.os.Bundle;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
+import android.text.TextUtils;
 import android.util.Base64;
 import android.util.Log;
 import android.view.View;
 import android.widget.Toast;
 
 import com.kakao.sdk.newtoneapi.SpeechRecognizeListener;
+import com.kakao.sdk.newtoneapi.SpeechRecognizerActivity;
 import com.kakao.sdk.newtoneapi.SpeechRecognizerClient;
 import com.kakao.sdk.newtoneapi.SpeechRecognizerManager;
 import com.kakao.sdk.newtoneapi.TextToSpeechClient;
@@ -37,8 +41,10 @@ public class MainActivity extends AppCompatActivity implements AutoPermissionsLi
     private TextToSpeechClient ttsClient;
     private SpeechRecognizerClient sttClient;
 
-    SpeechRecognizer recognizer;
-    TextToSpeech tts;
+    /* SpeechRecognizer recognizer;
+    TextToSpeech tts; */
+
+
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
@@ -53,16 +59,10 @@ public class MainActivity extends AppCompatActivity implements AutoPermissionsLi
         SpeechRecognizerManager.getInstance().initializeLibrary(this);
         TextToSpeechManager.getInstance().initializeLibrary(this);
 
-        findViewById(R.id.sttButton).setOnClickListener(new View.OnClickListener() {
-            @Override
-            public void onClick(View view) {
-                getVoice();
-            }
-        });
+        findViewById(R.id.sttButton).setOnClickListener(v -> getVoice());
 
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
-        toolbar.setTitle(R.string.app_name);
         ActionBar actionBar = getSupportActionBar();
         actionBar.setDisplayShowCustomEnabled(true);
         actionBar.setDisplayShowTitleEnabled(false);
@@ -70,12 +70,39 @@ public class MainActivity extends AppCompatActivity implements AutoPermissionsLi
     }
 
     private void getVoice(){
-        if (PermissionUtils.checkAudioRecordPermission(this)) {
-            SpeechRecognizerClient.Builder builder = new SpeechRecognizerClient.Builder()
-                    .setServiceType(SpeechRecognizerClient.SERVICE_TYPE_WORD);
-            sttClient = builder.build();
-            sttClient.setSpeechRecognizeListener(this);
-            sttClient.startRecording(true);
+        Intent intent = new Intent(getApplicationContext(), VoiceRecordActivity.class);
+        startActivityForResult(intent, 0);
+    }
+
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (resultCode == RESULT_OK) {
+            ArrayList<String> results = data.getStringArrayListExtra(VoiceRecordActivity.EXTRA_KEY_RESULT_ARRAY);
+            final StringBuilder builder = new StringBuilder();
+
+            for (String result: results){
+                builder.append(result);
+                builder.append("\n");
+            }
+
+            new AlertDialog.Builder(this)
+                    .setMessage(builder.toString())
+                    .setPositiveButton("확인", (dialog, which) -> dialog.dismiss())
+                    .show();
+        } else if (resultCode == RESULT_CANCELED) {
+            // 음성인식 등의 오류가 아닌 Activity가 취소 된 경우
+            if (data == null) return;
+
+            int errorCode = data.getIntExtra(VoiceRecordActivity.EXTRA_KEY_ERROR_CODE, -1);
+            String errorMsg = data.getStringExtra(VoiceRecordActivity.EXTRA_KEY_ERROR_MESSAGE);
+
+            if (errorCode != -1 && !TextUtils.isEmpty(errorMsg)) {
+                new AlertDialog.Builder(this)
+                        .setMessage(errorMsg)
+                        .setPositiveButton("확인", (dialog, which) -> dialog.dismiss())
+                        .show();
+            }
         }
     }
 
@@ -182,5 +209,13 @@ public class MainActivity extends AppCompatActivity implements AutoPermissionsLi
     @Override
     public void onFinished() {
 
+    }
+
+    @Override
+    protected void onDestroy() {
+        super.onDestroy();
+
+        // 카카오 음성 서비스 종료
+        SpeechRecognizerManager.getInstance().finalizeLibrary();
     }
 }
