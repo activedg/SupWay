@@ -6,61 +6,85 @@ import androidx.appcompat.app.ActionBar;
 import androidx.appcompat.app.AlertDialog;
 import androidx.appcompat.app.AppCompatActivity;
 import androidx.appcompat.widget.Toolbar;
+import androidx.core.app.ActivityCompat;
 
+import android.Manifest;
+import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
+import android.content.SharedPreferences;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.Signature;
 import android.media.MediaPlayer;
 import android.os.AsyncTask;
 import android.os.Bundle;
+import android.os.Handler;
+import android.speech.RecognitionListener;
 import android.speech.RecognizerIntent;
 import android.speech.SpeechRecognizer;
 import android.speech.tts.TextToSpeech;
 import android.text.TextUtils;
 import android.util.Base64;
 import android.util.Log;
+import android.view.Display;
 import android.view.View;
+import android.widget.CheckBox;
+import android.widget.TextView;
 import android.widget.Toast;
 
-import com.kakao.sdk.newtoneapi.SpeechRecognizeListener;
-import com.kakao.sdk.newtoneapi.SpeechRecognizerActivity;
-import com.kakao.sdk.newtoneapi.SpeechRecognizerClient;
-import com.kakao.sdk.newtoneapi.SpeechRecognizerManager;
-import com.kakao.sdk.newtoneapi.TextToSpeechClient;
-import com.kakao.sdk.newtoneapi.TextToSpeechManager;
-import com.kakao.sdk.newtoneapi.impl.util.PermissionUtils;
+import static android.speech.tts.TextToSpeech.ERROR;
 import com.pedro.library.AutoPermissions;
 import com.pedro.library.AutoPermissionsListener;
 
-import java.security.MessageDigest;
 import java.util.ArrayList;
-
-public class MainActivity extends AppCompatActivity implements AutoPermissionsListener, SpeechRecognizeListener {
-    private TextToSpeechClient ttsClient;
-    private SpeechRecognizerClient sttClient;
-
-    /* SpeechRecognizer recognizer;
-    TextToSpeech tts; */
+import java.util.Locale;
 
 
+public class MainActivity extends AppCompatActivity {
+    private static final int REQUEST_CODE_AUDIO_AND_WRITE_EXTERNAL_STORAGE = 0;
+    private TextToSpeech tts;
+    private Handler handler;
+    private SpeechRecognizer mRecognizer; // #2 Method
+    private boolean startVoice = false;
+    private TextView tvResult;
+    private CheckBox checkBox;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        getAppKeyHash();
+        tts = new TextToSpeech(this, new TextToSpeech.OnInitListener() {
+            @Override
+            public void onInit(int status) {
+                if (status != ERROR){
+                    tts.setLanguage(Locale.KOREAN);
+                    tts.setSpeechRate(0.8f);
+                    tts.setPitch(0.8f);
+                }
+            }
+        });
 
-        AutoPermissions.Companion.loadAllPermissions(this, 101);
+        handler = new Handler();
+        tvResult = findViewById(R.id.tv_result);
+        checkBox = findViewById(R.id.cb_start);
+        checkBox.setOnClickListener(v -> setStartOption());
 
-        // Kakao 음성인식 Api 초기화
-        SpeechRecognizerManager.getInstance().initializeLibrary(this);
-        TextToSpeechManager.getInstance().initializeLibrary(this);
+        SharedPreferences sf = getSharedPreferences("sOption", MODE_PRIVATE);
+        startVoice = sf.getBoolean("startVoice", false);
+        checkBox.setChecked(startVoice);
 
-        findViewById(R.id.sttButton).setOnClickListener(v -> getVoice());
+        if (ActivityCompat.checkSelfPermission(this, Manifest.permission.RECORD_AUDIO) != PackageManager.PERMISSION_GRANTED || ActivityCompat.checkSelfPermission(this, Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            if (ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.RECORD_AUDIO) && ActivityCompat.shouldShowRequestPermissionRationale(this, Manifest.permission.WRITE_EXTERNAL_STORAGE)) {
+                ActivityCompat.requestPermissions(this, new String[] { Manifest.permission.RECORD_AUDIO, Manifest.permission.WRITE_EXTERNAL_STORAGE}, REQUEST_CODE_AUDIO_AND_WRITE_EXTERNAL_STORAGE);
+            }
+        }
 
+        if (startVoice) { doVoice();}
+
+        findViewById(R.id.sttButton).setOnClickListener(v -> doVoice());
+        findViewById(R.id.sttImage).setOnClickListener(v -> extractVoice());
         Toolbar toolbar = findViewById(R.id.toolbar);
         setSupportActionBar(toolbar);
         ActionBar actionBar = getSupportActionBar();
@@ -69,60 +93,21 @@ public class MainActivity extends AppCompatActivity implements AutoPermissionsLi
         actionBar.setDisplayHomeAsUpEnabled(true);
     }
 
-    private void getVoice(){
-        Intent intent = new Intent(getApplicationContext(), VoiceRecordActivity.class);
-        startActivityForResult(intent, 0);
-    }
-
-    @Override
-    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
-        super.onActivityResult(requestCode, resultCode, data);
-        if (resultCode == RESULT_OK) {
-            ArrayList<String> results = data.getStringArrayListExtra(VoiceRecordActivity.EXTRA_KEY_RESULT_ARRAY);
-            final StringBuilder builder = new StringBuilder();
-
-            for (String result: results){
-                builder.append(result);
-                builder.append("\n");
-            }
-
-            new AlertDialog.Builder(this)
-                    .setMessage(builder.toString())
-                    .setPositiveButton("확인", (dialog, which) -> dialog.dismiss())
-                    .show();
-        } else if (resultCode == RESULT_CANCELED) {
-            // 음성인식 등의 오류가 아닌 Activity가 취소 된 경우
-            if (data == null) return;
-
-            int errorCode = data.getIntExtra(VoiceRecordActivity.EXTRA_KEY_ERROR_CODE, -1);
-            String errorMsg = data.getStringExtra(VoiceRecordActivity.EXTRA_KEY_ERROR_MESSAGE);
-
-            if (errorCode != -1 && !TextUtils.isEmpty(errorMsg)) {
-                new AlertDialog.Builder(this)
-                        .setMessage(errorMsg)
-                        .setPositiveButton("확인", (dialog, which) -> dialog.dismiss())
-                        .show();
-            }
+    private void setStartOption(){
+        if (checkBox.isChecked()){
+            startVoice = true;
+        } else {
+            startVoice = false;
         }
     }
 
-    @Override
-    public void onRequestPermissionsResult(int requestCode, @NonNull String[] permissions, @NonNull int[] grantResults) {
-        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
-        AutoPermissions.Companion.parsePermissions(this, requestCode, permissions, this);
-        Toast.makeText(this, "해당 권한이 승인되었습니다.", Toast.LENGTH_LONG);
+    private void doVoice(){
+        VoiceTask voiceTask = new VoiceTask();
+        voiceTask.execute();
+
     }
 
-    @Override
-    public void onDenied(int i, String[] strings) {
-    }
-
-    @Override
-    public void onGranted(int i, String[] strings) {
-    }
-
-    /*
-    public class VoiceTask extends AsyncTask<String, Integer, String> {
+    private class VoiceTask extends AsyncTask<String, Integer, String> {
         String str = null;
 
         @Override
@@ -135,12 +120,21 @@ public class MainActivity extends AppCompatActivity implements AutoPermissionsLi
         }
     }
 
+
     private void getVoice(){
         Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
         intent.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE,getPackageName());
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE_MODEL, RecognizerIntent.LANGUAGE_MODEL_FREE_FORM);
         intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR");
         startActivityForResult(intent, 2);
+
+        handler.postDelayed(new Runnable() {
+            @Override
+            public void run() {
+                tts.speak("현재 위치한 역 이름을 말씀하세요.", TextToSpeech.QUEUE_FLUSH, null);
+            }
+        }, 500);
+
     }
 
     @Override
@@ -150,72 +144,91 @@ public class MainActivity extends AppCompatActivity implements AutoPermissionsLi
         if (resultCode == RESULT_OK) {
             ArrayList<String> results = data.getStringArrayListExtra(RecognizerIntent.EXTRA_RESULTS);
             String str = results.get(0);
+
             if (str.contains("사당")){
-
+                Toast.makeText(this, "사당역", Toast.LENGTH_SHORT).show();
             }
         }
-    } */
+    }
 
-    private void getAppKeyHash() {
-        try {
-            PackageInfo info = getPackageManager().getPackageInfo(getPackageName(), PackageManager.GET_SIGNATURES);
-            for (Signature signature : info.signatures) {
-                MessageDigest md;
-                md = MessageDigest.getInstance("SHA");
-                md.update(signature.toByteArray());
-                String something = new String(Base64.encode(md.digest(), 0));
-                Log.e("Hash key", something);
-            }
-        } catch (Exception e) {
-            Log.e("name not found", e.toString());
+    // #2 Method
+    private void extractVoice(){
+        Intent intent = new Intent(RecognizerIntent.ACTION_RECOGNIZE_SPEECH);
+        intent.putExtra(RecognizerIntent.EXTRA_CALLING_PACKAGE, getPackageName());
+        intent.putExtra(RecognizerIntent.EXTRA_LANGUAGE, "ko-KR");
+        mRecognizer = SpeechRecognizer.createSpeechRecognizer(getApplicationContext());
+        mRecognizer.setRecognitionListener(listener);
+        mRecognizer.startListening(intent);
+    }
+
+    private RecognitionListener listener = new RecognitionListener() {
+        @Override
+        public void onReadyForSpeech(Bundle bundle) {
+
         }
-    }
+
+        @Override
+        public void onBeginningOfSpeech() {
+            tts.speak("현재 위치한 역 이름을 말씀하세요.", TextToSpeech.QUEUE_FLUSH, null);
+        }
+
+        @Override
+        public void onRmsChanged(float v) {
+
+        }
+
+        @Override
+        public void onBufferReceived(byte[] bytes) {
+
+        }
+
+        @Override
+        public void onEndOfSpeech() {
+
+        }
+
+        @Override
+        public void onError(int i) {
+            tts.speak("다시 말씀해주세요.", TextToSpeech.QUEUE_FLUSH, null);
+        }
+
+        @Override
+        public void onResults(Bundle bundle) {
+            String key = SpeechRecognizer.RESULTS_RECOGNITION;
+            ArrayList<String> results = bundle.getStringArrayList(key);
+            String rs = results.get(0);
+            Toast.makeText(getApplicationContext(), rs, Toast.LENGTH_SHORT).show();
+        }
+
+        @Override
+        public void onPartialResults(Bundle bundle) {
+
+        }
+
+        @Override
+        public void onEvent(int i, Bundle bundle) {
+
+        }
+    };
 
     @Override
-    public void onReady() {
+    protected void onStop() {
+        super.onStop();
 
-    }
-
-    @Override
-    public void onBeginningOfSpeech() {
-
-    }
-
-    @Override
-    public void onEndOfSpeech() {
-
-    }
-
-    @Override
-    public void onError(int errorCode, String errorMsg) {
-
-    }
-
-    @Override
-    public void onPartialResult(String partialResult) {
-
-    }
-
-    @Override
-    public void onResults(Bundle results) {
-
-    }
-
-    @Override
-    public void onAudioLevel(float audioLevel) {
-
-    }
-
-    @Override
-    public void onFinished() {
-
+        SharedPreferences sharedPreferences = getSharedPreferences("sOption", MODE_PRIVATE);
+        SharedPreferences.Editor editor = sharedPreferences.edit();
+        editor.putBoolean("startVoice", startVoice);
+        editor.commit();
     }
 
     @Override
     protected void onDestroy() {
         super.onDestroy();
 
-        // 카카오 음성 서비스 종료
-        SpeechRecognizerManager.getInstance().finalizeLibrary();
+        if(tts != null) {
+            tts.stop();
+            tts.shutdown();
+            tts = null;
+        }
     }
 }
